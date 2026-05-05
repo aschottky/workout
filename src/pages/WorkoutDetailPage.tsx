@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { ExerciseSet, Workout, WorkoutExerciseWithSets } from '../types'
@@ -21,6 +21,11 @@ export function WorkoutDetailPage() {
   const [editDate, setEditDate] = useState('')
   const [editNotes, setEditNotes] = useState('')
   const [savingMeta, setSavingMeta] = useState(false)
+
+  /** Local edits for weights/reps; synced from server when exercise rows change (keeps in-flight edits for existing set ids). */
+  const [weightDraft, setWeightDraft] = useState<Record<string, string>>({})
+  const [repsDraft, setRepsDraft] = useState<Record<string, string>>({})
+  const [savingSetLog, setSavingSetLog] = useState(false)
 
   const load = useCallback(async () => {
     if (!supabase || !user || !id) return
@@ -71,6 +76,31 @@ export function WorkoutDetailPage() {
       void load()
     })
   }, [load])
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setWeightDraft((prev) => {
+        const next: Record<string, string> = {}
+        for (const ex of exercises) {
+          for (const s of ex.exercise_sets) {
+            const fromServer = s.weight_kg == null ? '' : String(s.weight_kg)
+            next[s.id] = Object.hasOwn(prev, s.id) ? prev[s.id] : fromServer
+          }
+        }
+        return next
+      })
+      setRepsDraft((prev) => {
+        const next: Record<string, string> = {}
+        for (const ex of exercises) {
+          for (const s of ex.exercise_sets) {
+            const fromServer = String(s.reps)
+            next[s.id] = Object.hasOwn(prev, s.id) ? prev[s.id] : fromServer
+          }
+        }
+        return next
+      })
+    })
+  }, [exercises])
 
   async function saveMeta(e: FormEvent) {
     e.preventDefault()
@@ -151,27 +181,72 @@ export function WorkoutDetailPage() {
     await load()
   }
 
-  async function updateSetWeight(setId: string, weight: string) {
-    if (!supabase) return
-    const trimmed = weight.trim()
-    const weight_kg = trimmed === '' ? null : Number(trimmed)
-    if (trimmed !== '' && Number.isNaN(weight_kg)) return
+  async function saveSetLog() {
+    const client = supabase
+    if (!client) return
+    setSavingSetLog(true)
+    setError(null)
 
-    const { error: uErr } = await supabase
-      .from('exercise_sets')
-      .update({ weight_kg })
-      .eq('id', setId)
+    const rows: { id: string; reps: number; weight_kg: number | null }[] = []
 
-    if (uErr) setError(uErr.message)
-    else await load()
-  }
+    for (const ex of exercises) {
+      for (const s of ex.exercise_sets) {
+        const wStr = (weightDraft[s.id] ?? '').trim()
+        const weight_kg = wStr === '' ? null : Number(wStr)
+        if (wStr !== '' && Number.isNaN(weight_kg)) {
+          setError(`Invalid weight for “${ex.name}”, set ${s.set_index}.`)
+          setSavingSetLog(false)
+          return
+        }
 
-  async function updateSetReps(setId: string, reps: number) {
-    if (!supabase) return
-    const r = Math.max(1, Math.min(999, Math.floor(reps)))
-    const { error: uErr } = await supabase.from('exercise_sets').update({ reps: r }).eq('id', setId)
-    if (uErr) setError(uErr.message)
-    else await load()
+        const rStr = (repsDraft[s.id] ?? '').trim()
+        const reps = Math.floor(Number(rStr))
+        if (!Number.isFinite(reps) || reps < 1 || reps > 999) {
+          setError(`Invalid reps for “${ex.name}”, set ${s.set_index}.`)
+          setSavingSetLog(false)
+          return
+        }
+
+        const wSame =
+          (weight_kg == null && s.weight_kg == null) ||
+          (weight_kg != null &&
+            s.weight_kg != null &&
+            Number(weight_kg) === Number(s.weight_kg))
+        if (reps !== s.reps || !wSame) {
+          rows.push({ id: s.id, reps, weight_kg })
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      setSavingSetLog(false)
+      return
+    }
+
+    const results = await Promise.all(
+      rows.map((row) =>
+        client.from('exercise_sets').update({ reps: row.reps, weight_kg: row.weight_kg }).eq('id', row.id),
+      ),
+    )
+
+    const firstErr = results.find((r) => r.error)?.error
+    if (firstErr) {
+      setError(firstErr.message)
+      setSavingSetLog(false)
+      return
+    }
+
+    setExercises((prev) =>
+      prev.map((ex) => ({
+        ...ex,
+        exercise_sets: ex.exercise_sets.map((s) => {
+          const u = rows.find((r) => r.id === s.id)
+          return u ? { ...s, reps: u.reps, weight_kg: u.weight_kg } : s
+        }),
+      })),
+    )
+
+    setSavingSetLog(false)
   }
 
   async function applyPlan(exercise: WorkoutExerciseWithSets, newCount: number, defaultReps: number) {
@@ -254,16 +329,6 @@ export function WorkoutDetailPage() {
     else await load()
   }
 
-  const weightInputs = useMemo(() => {
-    const map = new Map<string, string>()
-    exercises.forEach((ex) => {
-      ex.exercise_sets.forEach((s) => {
-        map.set(s.id, s.weight_kg == null ? '' : String(s.weight_kg))
-      })
-    })
-    return map
-  }, [exercises])
-
   if (loading) {
     return <p className="muted">Loading workout…</p>
   }
@@ -286,12 +351,39 @@ export function WorkoutDetailPage() {
         <span aria-hidden="true"> / </span>
         <span>{workout.workout_date}</span>
       </nav>
+      {workout.schedule_id && (
+        <p className="muted small" style={{ marginTop: '-0.35rem', marginBottom: '0.75rem' }}>
+          From recurring schedule —{' '}
+          <Link to={`/schedule/${workout.schedule_id}`}>edit template</Link>
+        </p>
+      )}
+
+      {exercises.length > 0 && (
+        <Link to={`/workout/${workout.id}/train`} className="btn primary train-entry-btn">
+          Log workout (step by step)
+        </Link>
+      )}
 
       <header className="page-header">
         <h1>{workout.workout_date}</h1>
-        <button type="button" className="btn danger ghost" onClick={() => void deleteWorkout()}>
-          Delete workout
-        </button>
+        <div className="row">
+          {exercises.length > 0 ? (
+            <Link
+              to={`/schedules/from-workout/${workout.id}`}
+              className="btn ghost"
+              title="Copy exercises into a weekly schedule"
+            >
+              Use as recurring template
+            </Link>
+          ) : (
+            <span className="btn ghost" style={{ opacity: 0.45, cursor: 'not-allowed' }} title="Add at least one exercise first">
+              Use as recurring template
+            </span>
+          )}
+          <button type="button" className="btn danger ghost" onClick={() => void deleteWorkout()}>
+            Delete workout
+          </button>
+        </div>
       </header>
 
       {error && <p className="message error">{error}</p>}
@@ -360,19 +452,33 @@ export function WorkoutDetailPage() {
       {exercises.length === 0 ? (
         <p className="muted">No exercises yet. Add one above.</p>
       ) : (
-        <div className="stack gap-lg">
-          {exercises.map((ex) => (
-            <ExerciseCard
-              key={ex.id}
-              exercise={ex}
-              initialWeights={weightInputs}
-              onRemove={() => void removeExercise(ex.id)}
-              onBlurWeight={(setId, value) => void updateSetWeight(setId, value)}
-              onCommitReps={(setId, reps) => void updateSetReps(setId, reps)}
-              onApplyPlan={(count, reps) => void applyPlan(ex, count, reps)}
-            />
-          ))}
-        </div>
+        <>
+          <p className="muted small">
+            Edit weights and reps here, then use <strong>Save set log</strong> once—nothing is sent until you save.
+          </p>
+          <div className="stack gap-lg">
+            {exercises.map((ex) => (
+              <ExerciseCard
+                key={ex.id}
+                exercise={ex}
+                weightDraft={weightDraft}
+                repsDraft={repsDraft}
+                onWeightChange={(setId, value) =>
+                  setWeightDraft((d) => ({ ...d, [setId]: value }))
+                }
+                onRepsChange={(setId, value) => setRepsDraft((d) => ({ ...d, [setId]: value }))}
+                onRemove={() => void removeExercise(ex.id)}
+                onApplyPlan={(count, reps) => void applyPlan(ex, count, reps)}
+              />
+            ))}
+          </div>
+          <div className="save-set-log">
+            <button type="button" className="btn primary" disabled={savingSetLog} onClick={() => void saveSetLog()}>
+              {savingSetLog ? 'Saving…' : 'Save set log'}
+            </button>
+            <span className="muted small">Saves all weights and reps for this workout.</span>
+          </div>
+        </>
       )}
     </div>
   )
@@ -380,17 +486,19 @@ export function WorkoutDetailPage() {
 
 function ExerciseCard({
   exercise,
-  initialWeights,
+  weightDraft,
+  repsDraft,
+  onWeightChange,
+  onRepsChange,
   onRemove,
-  onBlurWeight,
-  onCommitReps,
   onApplyPlan,
 }: {
   exercise: WorkoutExerciseWithSets
-  initialWeights: Map<string, string>
+  weightDraft: Record<string, string>
+  repsDraft: Record<string, string>
+  onWeightChange: (setId: string, value: string) => void
+  onRepsChange: (setId: string, value: string) => void
   onRemove: () => void
-  onBlurWeight: (setId: string, value: string) => void
-  onCommitReps: (setId: string, reps: number) => void
   onApplyPlan: (sets: number, reps: number) => void
 }) {
   const [planSets, setPlanSets] = useState(exercise.exercise_sets.length || 3)
@@ -438,7 +546,10 @@ function ExerciseCard({
         </button>
       </div>
 
-      <p className="muted small">Log weight (kg or your unit—stored as a number) when you train. Leave blank if unknown.</p>
+      <p className="muted small">
+        Weight is a number (use the same unit every time). Reps and weight are saved when you click{' '}
+        <strong>Save set log</strong> at the bottom.
+      </p>
 
       <div className="sets-table-wrap">
         <table className="sets-table">
@@ -459,16 +570,8 @@ function ExerciseCard({
                     type="number"
                     min={1}
                     max={999}
-                    defaultValue={s.reps}
-                    key={`${s.id}-reps-${s.reps}`}
-                    onBlur={(e) => {
-                      const n = Number(e.target.value)
-                      if (!Number.isFinite(n)) {
-                        e.target.value = String(s.reps)
-                        return
-                      }
-                      onCommitReps(s.id, n)
-                    }}
+                    value={repsDraft[s.id] ?? String(s.reps)}
+                    onChange={(e) => onRepsChange(s.id, e.target.value)}
                   />
                 </td>
                 <td>
@@ -477,9 +580,8 @@ function ExerciseCard({
                     type="text"
                     inputMode="decimal"
                     placeholder="—"
-                    defaultValue={initialWeights.get(s.id) ?? ''}
-                    key={s.id + String(s.weight_kg)}
-                    onBlur={(e) => onBlurWeight(s.id, e.target.value)}
+                    value={weightDraft[s.id] ?? ''}
+                    onChange={(e) => onWeightChange(s.id, e.target.value)}
                   />
                 </td>
               </tr>

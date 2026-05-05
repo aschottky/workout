@@ -37,7 +37,26 @@ export function WorkoutsPage() {
       setError(qErr.message)
       return
     }
-    setWorkouts((data as Workout[]) ?? [])
+
+    let list = (data as Workout[]) ?? []
+    const scheduleIds = [...new Set(list.map((w) => w.schedule_id).filter(Boolean))] as string[]
+    if (scheduleIds.length > 0) {
+      const { data: sch, error: schErr } = await supabase
+        .from('workout_schedules')
+        .select('id, title')
+        .in('id', scheduleIds)
+
+      if (!schErr && sch?.length) {
+        const titleById = Object.fromEntries(sch.map((r) => [r.id as string, r.title as string]))
+        list = list.map((w) =>
+          w.schedule_id && titleById[w.schedule_id]
+            ? { ...w, workout_schedules: { title: titleById[w.schedule_id] } }
+            : w,
+        )
+      }
+    }
+
+    setWorkouts(list)
   }, [user])
 
   useEffect(() => {
@@ -72,9 +91,14 @@ export function WorkoutsPage() {
           <h1>Workouts</h1>
           <p className="muted">Plan exercises, sets, and reps—then log weight per set.</p>
         </div>
-        <button type="button" className="btn ghost" onClick={() => void signOut()}>
-          Sign out
-        </button>
+        <div className="row">
+          <Link to="/schedules" className="btn ghost">
+            Recurring schedules
+          </Link>
+          <button type="button" className="btn ghost" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       <section className="panel">
@@ -113,6 +137,9 @@ export function WorkoutsPage() {
               <li key={w.id}>
                 <Link to={`/workout/${w.id}`} className="list-link">
                   <span className="list-title">{w.workout_date}</span>
+                  {w.workout_schedules?.title && (
+                    <span className="schedule-pill">{w.workout_schedules.title}</span>
+                  )}
                   {w.notes && <span className="muted list-sub">{w.notes}</span>}
                 </Link>
               </li>
