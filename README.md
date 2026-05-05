@@ -28,9 +28,10 @@ For **local** dev, leave `VITE_BASE` unset (defaults to `/`).
 
 Live site (after setup): [https://aschottky.github.io/workout/](https://aschottky.github.io/workout/)
 
-1. Repo **Settings** → **Secrets and variables** → **Actions**: add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (same values as in `.env`).
-2. **Settings** → **Pages**: set **Source** to **GitHub Actions**.
-3. Push to `main` (or `master`). The workflow sets `VITE_BASE` to `/${{ repository.name }}/` automatically (here: `/workout/`).
+1. Add the workflow file (needed once): create `.github/workflows/deploy-pages.yml` in the repo with the same contents as [`deploy-pages.example.yml`](./deploy-pages.example.yml) in this project root (copy-paste, or `mkdir -p .github/workflows && cp deploy-pages.example.yml .github/workflows/deploy-pages.yml` and push). If your Git client cannot push workflow files, use the GitHub web editor or a token with **workflow** scope.
+2. Repo **Settings** → **Secrets and variables** → **Actions**: add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (same values as in `.env`).
+3. **Settings** → **Pages**: set **Source** to **GitHub Actions**.
+4. Push to `main`. The workflow sets `VITE_BASE` to `/${{ repository.name }}/` (here: `/workout/`).
 
 The app uses **hash routing** (`#/`, `#/workout/...`) so it works on GitHub Pages without extra `404` handling.
 
