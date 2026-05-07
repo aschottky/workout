@@ -417,6 +417,19 @@ input:focus {
   font-size: 0.72rem;
 }
 
+.preset-quick-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.preset-quick-btn {
+  width: 100%;
+  text-align: center;
+  justify-content: center;
+}
+
 .schedule-pill {
   display: inline-block;
   margin-left: 0.35rem;

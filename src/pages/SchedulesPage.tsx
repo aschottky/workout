@@ -4,7 +4,14 @@ import { supabase } from '../lib/supabase'
 import type { WorkoutSchedule } from '../types'
 import { useAuth } from '../auth/AuthContext'
 import { WEEKDAY_ORDER, WEEKDAY_SHORT } from '../lib/weekdays'
+import type { PresetInsertResult } from '../lib/presets/insertWorkoutSchedulePreset'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { insertLegTuesdayDbBandPreset } from '../lib/presets/legTuesdayDbBand'
+import {
+  insertHamsCalvesThursdayHomePreset,
+  insertPullWednesdayHomePreset,
+  insertTotalBodyFridayHomePreset,
+} from '../lib/presets/wedThuFriHomePresets'
 
 function formatWeekdays(ws: number[]) {
   const set = new Set(ws)
@@ -20,7 +27,7 @@ export function SchedulesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [addingPreset, setAddingPreset] = useState(false)
+  const [addingPresetKey, setAddingPresetKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!supabase || !user) return
@@ -68,12 +75,15 @@ export function SchedulesPage() {
     navigate(`/schedule/${data.id}`)
   }
 
-  async function addLegTuesdayPreset() {
+  async function runPreset(
+    key: string,
+    insertFn: (client: SupabaseClient, userId: string) => Promise<PresetInsertResult>,
+  ) {
     if (!supabase || !user) return
-    setAddingPreset(true)
+    setAddingPresetKey(key)
     setError(null)
-    const result = await insertLegTuesdayDbBandPreset(supabase, user.id)
-    setAddingPreset(false)
+    const result = await insertFn(supabase, user.id)
+    setAddingPresetKey(null)
     if (!result.ok) {
       setError(result.error)
       return
@@ -107,12 +117,43 @@ export function SchedulesPage() {
       <section className="panel">
         <h2>Quick add</h2>
         <p className="muted small">
-          Leg routine with dumbbells + band: six moves (3×10 each, last move 1×10), repeating every{' '}
-          <strong>Tuesday</strong>.
+          One-tap recurring templates (home). Each creates a schedule on the matching weekday; edit or spawn workouts
+          on the next screen. Weights you log when you train.
         </p>
-        <button type="button" className="btn primary" disabled={addingPreset} onClick={() => void addLegTuesdayPreset()}>
-          {addingPreset ? 'Adding…' : 'Add: Leg day — DB + band (Tuesdays)'}
-        </button>
+        <div className="preset-quick-grid">
+          <button
+            type="button"
+            className="btn primary preset-quick-btn"
+            disabled={addingPresetKey !== null}
+            onClick={() => void runPreset('tue', insertLegTuesdayDbBandPreset)}
+          >
+            {addingPresetKey === 'tue' ? 'Adding…' : 'Tue · Leg day — DB + band'}
+          </button>
+          <button
+            type="button"
+            className="btn primary preset-quick-btn"
+            disabled={addingPresetKey !== null}
+            onClick={() => void runPreset('wed', insertPullWednesdayHomePreset)}
+          >
+            {addingPresetKey === 'wed' ? 'Adding…' : 'Wed · Pull day (home)'}
+          </button>
+          <button
+            type="button"
+            className="btn primary preset-quick-btn"
+            disabled={addingPresetKey !== null}
+            onClick={() => void runPreset('thu', insertHamsCalvesThursdayHomePreset)}
+          >
+            {addingPresetKey === 'thu' ? 'Adding…' : 'Thu · Hams / calves (home)'}
+          </button>
+          <button
+            type="button"
+            className="btn primary preset-quick-btn"
+            disabled={addingPresetKey !== null}
+            onClick={() => void runPreset('fri', insertTotalBodyFridayHomePreset)}
+          >
+            {addingPresetKey === 'fri' ? 'Adding…' : 'Fri · Total body (home)'}
+          </button>
+        </div>
       </section>
 
       <section className="panel">
